@@ -7,7 +7,14 @@ const SLASH: char = '\\';
 #[cfg(target_os = "linux")]
 const SLASH: char = '/';
 
-// Macro assumes that 'self' is in scope of 'InputLexer'
+// This as used as char exceptions for classifying identifiers
+// Unfortunately OS-dependant since windows uses '/' and '?' inside program arguments
+#[cfg(target_os = "windows")]
+const IDENT_EXCEPT: [char; 4] = ['/', '?', '-', '.'];
+#[cfg(target_os = "linux")]
+const IDENT_EXCEPT: [char; 2] = ['-', '.'];
+
+// Macro assumes that 'this' is in scope of 'InputLexer'
 macro_rules! expect_char {
     ( $this:expr, $expected:expr, $span:expr $(, $hint:expr)? ) => {{
         if $this.cur_char != $expected {
@@ -17,7 +24,6 @@ macro_rules! expect_char {
                     Label::new(("stdin", $span))
                         .with_message(format!("Expected '{}' here", $expected))
                 )
-                // TODO: Figure out why this isn't working even though macro expansion is fine
                 $(.with_note($hint))?
                 .finish()
                 .print(("stdin", Source::from(String::from_utf8($this.source.clone().into()).unwrap())))
@@ -30,6 +36,14 @@ macro_rules! expect_char {
     }}
 }
 
+// Creates a default token of $var type with no text or span
+#[macro_export]
+macro_rules! default_token {
+    ( $var:ident ) => {
+        Token::new(TokenType::$var, 0 .. 0)
+    }
+}
+
 pub struct InputLexer {
     source: Vec<u8>,
     cur_char: char,
@@ -38,8 +52,7 @@ pub struct InputLexer {
 }
 
 impl InputLexer {
-    pub fn new(source: String) -> Self {
-        let mut source: Vec<u8> = source.as_bytes().into();
+    pub fn new(mut source: Vec<u8>) -> Self {
         #[cfg(target_os = "windows")]
         for _ in 0..2 { source.pop().unwrap(); }
 
@@ -56,25 +69,33 @@ impl InputLexer {
 
     fn next_char(&mut self) {
         self.index += 1;
-        self.cur_char = *self.source.get(self.index).unwrap_or(&0) as char;
-        self.peek_char = *self.source.get(self.index + 1).unwrap_or(&0) as char;
+        self.cur_char = *self.source.get(self.index).unwrap_or(&0x03u8) as char;
+        self.peek_char = *self.source.get(self.index + 1).unwrap_or(&0x03u8) as char;
     }
 
     pub fn next_token(&mut self) -> Option<Token> {
         match self.cur_char {
             // Identifier
-            c if c.is_alphabetic() && self.peek_char != ':' => {
+            // Accepts IDENT_EXCEPT characters for purposes of file extensions and argv
+            c if (c.is_alphabetic() && self.peek_char != ':') || IDENT_EXCEPT.contains(&c) => {
                 let start = self.index;
 
-                while self.cur_char.is_alphanumeric() {
+                while self.cur_char.is_alphanumeric() || IDENT_EXCEPT.contains(&self.cur_char) {
                     self.next_char();
                 }
 
                 let end = self.index;
 
+                // Check if there is a file extension
+                if str::from_utf8(&self.source[start .. end]).unwrap().contains('.') {
+                    return Some(Token::new(
+                        TokenType::Path,
+                        start .. end
+                    ))
+                }
+
                 return Some(Token::new(
                     TokenType::Identifier,
-                    String::from_utf8(self.source[start .. end].into()).unwrap(),
                     start .. end
                 ));
             }
@@ -91,7 +112,6 @@ impl InputLexer {
 
                 return Some(Token::new(
                     TokenType::Number,
-                    String::from_utf8(self.source[start .. end].into()).unwrap(),
                     start .. end
                 ));
             }
@@ -115,7 +135,6 @@ impl InputLexer {
 
                             return Some(Token::new(
                                 TokenType::Path,
-                                String::from_utf8(self.source[start .. end].into()).unwrap(),
                                 start .. end
                             ));
                         } else if self.peek_char == '.' {
@@ -123,7 +142,7 @@ impl InputLexer {
                             let start = self.index;
                             self.next_char();
                             expect_char!(self, '.', self.index .. self.index + 1);
-                            expect_char!(self, SLASH, self.index .. self.index + 1);
+                            expect_char!(self, SLASH, self.index .. self.index + 1, "Slashes are platform depdendant");
 
                             while self.cur_char.is_alphanumeric() || self.cur_char == SLASH {
                                 self.next_char();
@@ -133,7 +152,6 @@ impl InputLexer {
 
                             return Some(Token::new(
                                 TokenType::Path,
-                                String::from_utf8(self.source[start .. end].into()).unwrap(),
                                 start .. end
                             ));
                         } else {
@@ -157,6 +175,7 @@ impl InputLexer {
                     c if (c.is_alphabetic() && self.peek_char == ':') || c == SLASH => {
                         // Full path
                         let start = self.index;
+                        self.next_char();
                         
                         #[cfg(target_os = "windows")]
                         {
@@ -172,18 +191,88 @@ impl InputLexer {
 
                         return Some(Token::new(
                             TokenType::Path,
-                            String::from_utf8(self.source[start .. end].into()).unwrap(),
                             start .. end
                         ));
                     }
 
                     _ => unimplemented!()
                 }
-
-                return Some(Token::new(TokenType::And, String::new(), 0..1))
             }
 
-            '\0' => Some(Token::new(TokenType::EOF, "\0".to_string(), 0..0)),
+            // String
+            '"' | '\'' => {
+                let quote_char = self.cur_char;
+                let start = self.index;
+                self.next_char();
+
+                let mut closed = false;
+
+                while self.index < self.source.len() {
+                    match self.cur_char {
+                        '\\' => {
+                            self.next_char();
+                            self.next_char();
+                        }
+
+                        c if c == quote_char => {
+                            self.next_char();
+                            closed = true;
+                            break;
+                        }
+
+                        _ => self.next_char()
+                    }
+                }
+
+                if !closed {
+                    Report::build(ReportKind::Error, ("stdin", 0..0))
+                        .with_message("Unexpected termination of string")
+                        .with_label(
+                            Label::new(("stdin", start .. self.index - 1))
+                                .with_message(format!("This string should be terminated with {}", quote_char))
+                        )
+                        .with_note("Keep string delimiters should be consistent")
+                        .finish()
+                        .print(("stdin", Source::from(String::from_utf8(self.source.clone().into()).unwrap())))
+                        .unwrap();
+
+                    return None;
+                }
+
+                Some(Token::new(TokenType::String, start .. self.index))
+            }
+
+            // Pipe
+            '|' => {
+                self.next_char();
+                Some(Token::new(TokenType::Pipe, self.index - 1 .. self.index))
+            }
+
+            // RedirIn
+            '<' => {
+                self.next_char();
+                Some(Token::new(TokenType::RedirIn, self.index - 1 .. self.index))
+            }
+
+            // RedirOut
+            '>' => {
+                self.next_char();
+                Some(Token::new(TokenType::RedirOut, self.index - 1 .. self.index))
+            }
+
+            // And
+            '&' => {
+                self.next_char();
+                Some(Token::new(TokenType::And, self.index - 1 .. self.index))
+            }
+
+            c if c.is_whitespace() => {
+                self.next_char();
+                Some(default_token!(Whitespace))
+            }
+
+            '\0' => Some(default_token!(EOF)),
+            '\x03' => None, // This represents 0x03 END OF TEXT byte to stop any iterators
             _ => unreachable!("No matching token implementation found for this input")
         }
     }
@@ -205,37 +294,49 @@ impl InputLexer {
     }
 }
 
-#[derive(Debug)]
+impl Iterator for InputLexer {
+    type Item = Token;
+    
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_token()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Token {
-    typ: TokenType,
-    text: String,
-    range: Range<usize>
+    pub typ: TokenType,
+    pub start: usize,
+    pub end: usize
 }
 
 impl Token {
-    pub fn new(typ: TokenType, text: String, range: Range<usize>) -> Self {
+    pub fn new(typ: TokenType, range: Range<usize>) -> Self {
         Self {
             typ,
-            text,
-            range
+            start: range.start,
+            end: range.end
         }
     }
 }
 
-#[derive(Debug)]
+// TODO: Can I implement sub-commands here like 'echo ${cat /home/nicholas/test.txt}'?
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenType {
     // Text-values
     Identifier,
     Number,
     Path,
+    String,
 
     // Operators
-    Pipe, // '|'
-    RedirIn, // '<'
-    RedirOut, // '>'
+    Pipe, // '|' - pipes stdout to stdin of following program
+    RedirIn, // '<' - pipes file to stdin of program
+    RedirOut, // '>' - pipes stdout to file
     And, // '&'
 
     // Special types
     // Generally used for internal reference and not an actual value
+    Whitespace,
     EOF
 }
