@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::io::{stdin, stdout, Write};
 
 mod input_lexer;
@@ -12,26 +11,31 @@ use engine::*;
 
 fn main() {
     let mut engine = Engine::new();
-    let mut lexer;
-    let mut parser: InputParser;
-    let mut module;
-
     let mut stdin_buffer;
-    let mut stdin_bytes;
     let mut stdout = stdout();
     let stdin = stdin();
     
     // TODO: Empty command freezes / causes infinite loop
     loop {
         stdin_buffer = String::new();
-        print!(">");
+        print!("{}>", engine.cur_dir);
         stdout.flush().expect("Unable to flush stdout!");
-        stdin.read_line(&mut stdin_buffer).expect("Unable to read line from stdin!");
-        stdin_bytes = stdin_buffer.as_bytes().into();
 
-        lexer = InputLexer::new(stdin_bytes);
-        parser = InputParser::new(&*stdin_buffer, lexer.filter(|token| token.typ != TokenType::Whitespace).collect());
-        module = parser.build_ast();
-        engine.execute(module);
+        stdin.read_line(&mut stdin_buffer)
+            .expect("Unable to read line from stdin!");
+
+        let stdin_bytes = stdin_buffer.as_bytes().into();
+
+        let lexer = InputLexer::new(stdin_bytes);
+
+        let tokens = lexer
+            .filter(|token| token.typ != TokenType::Whitespace)
+            .collect();
+
+        let mut parser = InputParser::new(&*stdin_buffer, tokens);
+
+        let module = parser.build_ast();
+
+        engine.execute(stdin_buffer.as_str(), module);
     }
 }

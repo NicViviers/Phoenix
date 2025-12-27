@@ -16,26 +16,26 @@ impl<T: Clone> Spanned<T> {
     }
 }
 
-#[derive(Debug)]
-pub struct Module<'a> {
-    pub stmts: Vec<Spanned<Program<'a>>>
+#[derive(Debug, Clone)]
+pub struct Module {
+    pub stmts: Vec<Spanned<Program>>
 }
 
 #[derive(Debug, Clone)]
-pub struct Program<'a> {
-    pub program: &'a str,
-    pub argv: Vec<&'a str>,
-    pub stdin: StreamStrategy<'a>,
-    pub stdout: StreamStrategy<'a>
+pub struct Program {
+    pub program: Range<usize>,
+    pub argv: Vec<Range<usize>>,
+    pub stdin: StreamStrategy,
+    pub stdout: StreamStrategy
     // We don't handle stderr in any special way
 }
 
-impl<'a> Program<'a> {
+impl Program {
     pub fn new(
-        program: &'a str,
-        argv: Vec<&'a str>,
-        stdin: StreamStrategy<'a>,
-        stdout: StreamStrategy<'a>
+        program: Range<usize>,
+        argv: Vec<Range<usize>>,
+        stdin: StreamStrategy,
+        stdout: StreamStrategy
     ) -> Self {
         Self {
             program,
@@ -47,9 +47,9 @@ impl<'a> Program<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum StreamStrategy<'a> {
+pub enum StreamStrategy {
     Inherit, // Inherit from Phoenix
-    PipeFromFile(&'a str), // Pipe file content to stdin
-    PipeToFile(&'a str), // Pipe stdout to file
+    PipeFromFile(Range<usize>), // Pipe file content to stdin
+    PipeToFile(Range<usize>), // Pipe stdout to file
     PipeToStdin // Pipe stdout to stdin of next program
 }

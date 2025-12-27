@@ -55,7 +55,7 @@ impl<'a> InputParser<'a> {
         Some(token)
     }
 
-    fn process_command(&mut self) -> Option<Spanned<Program<'a>>> {
+    fn process_command(&mut self) -> Option<Spanned<Program>> {
         let tmp = self.next_token();
         if tmp.typ == TokenType::EOF {
             return None
@@ -70,7 +70,7 @@ impl<'a> InputParser<'a> {
         let mut argv = Vec::new();
         let mut token = self.next_token();
         while ![TokenType::EOF, TokenType::And, TokenType::Pipe, TokenType::RedirIn, TokenType::RedirOut].contains(&token.typ) {
-            argv.push(&self.source[token.start .. token.end]);
+            argv.push(token.start .. token.end);
             token = self.next_token();
         }
 
@@ -88,7 +88,7 @@ impl<'a> InputParser<'a> {
                     &[TokenType::Path],
                     Some("You must provide the path to a file to redirect to stdin")
                 )?;
-                stdin = StreamStrategy::PipeFromFile(&self.source[file_handle.start .. file_handle.end]);
+                stdin = StreamStrategy::PipeFromFile(file_handle.start .. file_handle.end);
                 stdout = StreamStrategy::Inherit;
             }
 
@@ -98,28 +98,26 @@ impl<'a> InputParser<'a> {
                     Some("You must provide the path to a file to redirect stdout to")
                 )?;
                 stdin = StreamStrategy::Inherit;
-                stdout = StreamStrategy::PipeToFile(&self.source[file_handle.start .. file_handle.end])
+                stdout = StreamStrategy::PipeToFile(file_handle.start .. file_handle.end)
             }
 
             TokenType::EOF | TokenType::And => {
-                token.end = cmd.end; // Correct the span if there are no pipes or redirects (which would cause EOF with span of 0 .. 0)
-                // TODO: I don't think this is correct: We've already consumed it which is correct for the next process_command() call
-                // Move one token back for next command
-                //self.index -= 1;
+                // Correct the span if there are no pipes or redirects (which would cause EOF with span of 0 .. 0)
+                token.end = cmd.end;
             }
 
             _ => unreachable!()
         }
 
         Some(Spanned::new(Program::new(
-            &self.source[cmd.start .. cmd.end],
+            cmd.start .. cmd.end,
             argv,
             stdin,
             stdout
         ), cmd.start .. token.end))
     }
 
-    pub fn build_ast(&mut self) -> Module<'a> {
+    pub fn build_ast(&mut self) -> Module {
         let mut stmts = Vec::new();
 
         while let Some(cmd) = self.process_command() {
