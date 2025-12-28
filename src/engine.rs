@@ -148,7 +148,7 @@ impl Engine {
 
 // TODO: Finish implementing builtins module
 mod builtins {
-    use std::{collections::HashMap, io::Write};
+    use std::{collections::HashMap, io::{Read, Write}};
     use crate::ast::{Spanned, Program};
 
     pub type BuiltinFn = fn(&mut crate::Engine, &Spanned<Program>) -> std::io::Result<()>;
@@ -157,6 +157,7 @@ mod builtins {
         HashMap::from([
             ("cd", cd as BuiltinFn),
             ("ls", ls as BuiltinFn),
+            ("echo", echo as BuiltinFn),
             ("clear", clear as BuiltinFn),
             ("exit", exit as BuiltinFn)
         ])
@@ -180,6 +181,23 @@ mod builtins {
         std::fs::read_dir(engine.cur_dir.as_str()).unwrap().for_each(|entry| {
             println!("{}", entry.unwrap().file_name().display());
         });
+
+        println!();
+
+        Ok(())
+    }
+
+    fn echo(engine: &mut crate::Engine, stmt: &Spanned<Program>) -> std::io::Result<()> {
+        if stmt.value.argv.len() > 0 {
+            let content = &engine.source[stmt.value.argv[0].clone()];
+            println!("{}", content);
+        } else {
+            // TODO: We don't support piping for internals
+            // could we possibly change that to support piping *to* internals and not *from*?
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer)?;
+            println!("{}", String::from_utf8(buffer).unwrap());
+        }
 
         println!();
 
